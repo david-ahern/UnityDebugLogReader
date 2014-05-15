@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -28,6 +29,7 @@ namespace UnityDebugLogReader
         string dir;
 
         bool _streamStopped = true;
+        bool OtherThreadStopped = true;
 
         System.Windows.Forms.Timer timer;
         int nDots;
@@ -42,10 +44,11 @@ namespace UnityDebugLogReader
             OutputLines = new List<string>();
 
             dir = "";
+            DirectoryLabel.Text = dir;
 
             fDialog = new OpenFileDialog();
             fDialog.Title = "Open Stream";
-            fDialog.Filter = "TextFiles|*.txt";
+            fDialog.Filter = "txt files (*.txt)|*.txt|All files|*.*";
             fDialog.InitialDirectory = Directory.GetCurrentDirectory();
             fDialog.FileOk += FileDirectorySelected;
 
@@ -53,27 +56,26 @@ namespace UnityDebugLogReader
             timer.Tick += timer_Tick;
             timer.Interval = 333;
             nDots = 0;
-            timer.Start();
 
             StatusLabel.Text = "Stopped";
             StatusLabel.ForeColor = Color.Red;
+
+            CloseStreamButton.Enabled = false;
+            LoadAllButton.Enabled = false;
         }
 
         private void timer_Tick(object sender, EventArgs e)
         {
-            if (!_streamStopped)
-            {
-                StatusLabel.ForeColor = Color.Green;
-                StatusLabel.Text = "Streaming";
+            StatusLabel.ForeColor = Color.Green;
+            StatusLabel.Text = "Streaming";
 
-                for (int i = 0; i < nDots; ++i)
-                    StatusLabel.Text += " .";
+            for (int i = 0; i < nDots; ++i)
+                StatusLabel.Text += " .";
 
-                if (nDots >= 3)
-                    nDots = 0;
-                else
-                    nDots++;
-            }
+            if (nDots >= 3)
+                nDots = 0;
+            else
+                nDots++;
         }
 
 
@@ -85,7 +87,6 @@ namespace UnityDebugLogReader
         private void CloseStreamButton_Click(object sender, EventArgs e)
         {
             RequestStop();
-            DirectoryLabel.Text = "";
         }
 
         private void OpenStreamButton_Click(object sender, EventArgs e)
@@ -108,22 +109,28 @@ namespace UnityDebugLogReader
 
             if (Log != null)
             {
+                _streamStopped = false;
+                OtherThreadStopped = false;
                 CheckLogThread = new Thread(CheckDebugLogFile);
                 CheckLogThread.Start();
 
                 OutputLogThread = new Thread(PrintOutputToWindow);
                 OutputLogThread.Start();
+
+                CloseStreamButton.Enabled = true;
+                OpenStreamButton.Enabled = false;
+                LoadAllButton.Enabled = true;
+                timer.Start();
             }
         }
 
         private void CheckDebugLogFile()
         {
+            Console.WriteLine("CheckDebugLogFileThread ID: " + CheckLogThread.ManagedThreadId);
             long prevSize = 0;
-            _streamStopped = false;
-
             Console.WriteLine("Starting CheckDebugLogFile");
 
-            while (!_streamStopped)
+            while (!_streamStopped && !OtherThreadStopped)
             {
                 if (prevSize < Log.Length)
                 {
@@ -138,7 +145,10 @@ namespace UnityDebugLogReader
                     {
                         lock (locker)
                         {
-                            OutputLines.Add(stringArray[i]);
+                            if (stringArray[i].Length > 0 && (byte)stringArray[i][0] != 13)
+                                OutputLines.Add(stringArray[i]);
+                            else if (i < stringArray.Length - 1)
+                                stringArray[i + 1] = "\n" + stringArray[i + 1];
                         }
                     }
 
@@ -148,7 +158,6 @@ namespace UnityDebugLogReader
                 {
                     lock (locker)
                     {
-                        Console.WriteLine("Resetting output");
                         Log.Position = 0;
                         OutputLines.Clear();
                         MethodInvoker mi = delegate() { OutputTextbox.Text = ""; OutputTextbox.ScrollToCaret(); };
@@ -157,17 +166,19 @@ namespace UnityDebugLogReader
                         prevSize = 0;
                     }
                 }
-                string status = "Streaming";               
 
                 Thread.Yield();
             }
+
+            if (OtherThreadStopped)
+                Reset(false);
+            else
+                OtherThreadStopped = true;
         }
 
         private void PrintOutputToWindow()
         {
-            Console.WriteLine("Start PrintOutputToWindow");
-
-            while (!_streamStopped)
+            while (!_streamStopped && !OtherThreadStopped)
             {
                 if (OutputLines.Count > NumLinesOutput)
                 {
@@ -183,20 +194,40 @@ namespace UnityDebugLogReader
                 }
                 Thread.Yield();
             }
+            if (OtherThreadStopped)
+                Reset(false);
+            else
+                OtherThreadStopped = true;
         }
 
         private void RequestStop()
         {
             _streamStopped = true;
+
+            DirectoryLabel.Text = "";
+            
+            timer.Stop();
+            StatusLabel.Text = "Stopped";
+            StatusLabel.ForeColor = Color.Red;
+
+            CloseStreamButton.Enabled = false;
+            LoadAllButton.Enabled = false;
+            OpenStreamButton.Enabled = true;
+
+
         }
 
         private void Reset(bool clearText)
         {
+            Console.WriteLine("Reset");
             _streamStopped = true;
-            OutputLines.Clear();
+
             if (clearText)
+            {
                 OutputTextbox.Text = "";
-            NumLinesOutput = 0;
+                NumLinesOutput = 0;
+                OutputLines.Clear();
+            }
             if (Log != null)
                 Log.Close();
 
@@ -204,6 +235,18 @@ namespace UnityDebugLogReader
                 CheckLogThread.Abort();
             if (OutputLogThread != null && OutputLogThread.IsAlive)
                 OutputLogThread.Abort();
+        }
+
+        private void ClearButton_Click(object sender, EventArgs e)
+        {
+            OutputTextbox.Text = "";
+        }
+
+        private void LoadAllButton_Click(object sender, EventArgs e)
+        {
+            OutputTextbox.Text = "";
+            NumLinesOutput = 0;
+            Log.Position = 0;
         }
 
 
